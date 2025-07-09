@@ -1,46 +1,38 @@
 import os
 import subprocess
 import re
-"""Script ini mengunduh playlist YouTube, membersihkan nama file,
-dan melakukan push ke GitHub."""
 
 # --- KONFIGURASI ---
-# Ganti dengan daftar URL playlist YouTube Anda
+# Ganti dengan daftar URL playlist YouTube Anda yang valid
 PLAYLIST_URLS = [
-    "https://www.youtube.com/playlist?list=PL5868bcJqA4Fo1HpNLSIFxMhlG2jmcUch",
-    "https://www.youtube.com/playlist?list=PL4fGSI1pDJn5ObxTlEPlkkornHXUiKX1z",
-    "https://www.youtube.com/playlist?list=OLAK5uy_n7Ig_LAUbKE6_ZeQ1pwHmJcEhwX7BekBo",
-    "https://www.youtube.com/playlist?list=PL4fGSI1pDJn5QPpj0R4vVgRWk8sSq549G",
+    "https://www.youtube.com/playlist?list=PLCi2gmF270m1gZuPF_cbUk5Ml-Sawjvo8",
+    "https://www.youtube.com/playlist?list=PL9l5iOOqS0F8yickz_Bt6HVSAHMey7Oj3",
+    # "https://www.youtube.com/playlist?list=PL5868bcJqA4Fo1HpNLSIFxMhlG2jmcUch",
+    # "https://www.youtube.com/playlist?list=PL4fGSI1pDJn5ObxTlEPlkkornHXUiKX1z",
     # Tambahkan URL playlist lainnya di sini...
 ]
 
-# Pesan commit untuk Gi
-COMMIT_MESSAGE = "Update: Menghapus teks dalam kurung dari nama file"
-
-# --- FUNGSI BARU UNTUK MEMBERSIHKAN NAMA FILE ---
+# --- FUNGSI PEMBERSIH NAMA FILE ---
 def clean_filenames_in_directory(directory):
     """
-    Mengganti nama file di dalam direktori yang diberikan dengan menghapus
-    tanda kurung dan teks di dalamnya.
-    Contoh: '01 - Judul Lagu (Official Video).mp3' -> '01 - Judul Lagu.mp3'
+    Mengganti nama file dengan menghapus teks dalam kurung dan mengembalikan
+    True jika ada file yang diubah namanya.
     """
     print(f"🧹 Memeriksa dan membersihkan nama file di folder: '{directory}'...")
     if not os.path.isdir(directory):
-        print(f"  ⚠️ Peringatan: Direktori '{directory}' tidak ditemukan.")
-        return
+        print(f"  ⚠️  Peringatan: Direktori '{directory}' tidak ditemukan.")
+        return False
 
-    # Pola regex untuk menemukan spasi diikuti tanda kurung dan isinya
-    # Contoh: ' (text here)'
+    renamed_anything = False
     pattern = re.compile(r'\s*\([^)]*\)')
 
     for filename in os.listdir(directory):
-        # Hanya proses file mp3
         if filename.endswith(".mp3"):
-            # Hapus pola regex dari nama file (tanpa ekstensi)
             name_without_ext, extension = os.path.splitext(filename)
-            new_name_without_ext = pattern.sub('', name_without_ext).strip()
+            # Hapus juga potensi kurung siku `[]`
+            name_no_brackets = re.sub(r'\s*\[[^\]]*\]', '', name_without_ext)
+            new_name_without_ext = pattern.sub('', name_no_brackets).strip()
 
-            # Jika nama berubah, lakukan penggantian nama file
             if new_name_without_ext != name_without_ext:
                 new_filename = new_name_without_ext + extension
                 old_path = os.path.join(directory, filename)
@@ -49,90 +41,113 @@ def clean_filenames_in_directory(directory):
                 try:
                     os.rename(old_path, new_path)
                     print(f"  -> Mengganti nama: '{filename}' -> '{new_filename}'")
+                    renamed_anything = True
                 except OSError as e:
                     print(f"  ❌ Gagal mengganti nama '{filename}': {e}")
+    
+    return renamed_anything
 
-
-# --- FUNGSI UTAMA ---
-
-def download_playlists():
+# --- FUNGSI GIT BARU ---
+def commit_and_push_changes(folder_path, commit_message):
     """
-    Mengunduh setiap playlist dan membersihkan nama filenya.
+    Menjalankan 'git add', 'commit', dan 'push' untuk folder tertentu.
+    Hanya berjalan jika ada perubahan yang terdeteksi.
     """
-    if not PLAYLIST_URLS:
-        print("Daftar PLAYLIST_URLS kosong. Harap isi dengan URL playlist.")
-        return False
+    try:
+        print(f"\n--- Memulai proses Git untuk '{folder_path}' ---")
+
+        # Cek status HANYA untuk folder yang relevan untuk melihat apakah ada perubahan
+        # Ini penting agar kita tidak melakukan commit kosong
+        status_proc = subprocess.run(
+            ['git', 'status', '--porcelain', folder_path], 
+            capture_output=True, text=True, check=True, encoding='utf-8'
+        )
+
+        if not status_proc.stdout.strip():
+            print("✅ Tidak ada file baru atau perubahan untuk di-commit di playlist ini.")
+            return
+
+        print(f"📦 Menambahkan perubahan dari '{folder_path}' ke staging...")
+        subprocess.run(['git', 'add', folder_path], check=True)
+        # Tambahkan juga file yang mungkin telah diganti namanya (dihapus)
+        subprocess.run(['git', 'add', '-u', folder_path], check=True)
+        
+        print(f"📝 Melakukan commit dengan pesan: '{commit_message}'")
+        subprocess.run(['git', 'commit', '-m', commit_message], check=True)
+
+        print("🚀 Mendorong (push) ke remote origin 'main'...")
+        subprocess.run(['git', 'push', 'origin', 'main'], check=True) 
+        
+        print(f"\n✅ Sukses! Perubahan untuk '{folder_path}' berhasil di-push ke GitHub.")
+
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Proses Git gagal. Mungkin tidak ada perubahan untuk di-commit atau terjadi error lain.")
+        print(f"   Error: {e.stderr}")
+    except FileNotFoundError:
+        print("❌ Perintah 'git' tidak ditemukan. Pastikan Git sudah terinstall dan ada di PATH.")
+    except Exception as e:
+        print(f"❌ Terjadi kesalahan tak terduga saat proses Git: {e}")
+
+# --- FUNGSI UTAMA YANG DIMODIFIKASI ---
+def download_and_sync_playlists():
+    """
+    Mengunduh setiap playlist, membersihkan nama filenya, dan langsung melakukan
+    commit & push untuk setiap playlist yang selesai diproses.
+    """
+    if not any(url for url in PLAYLIST_URLS if "http://googleusercontent.com/youtube.com/" in url):
+        print("Daftar PLAYLIST_URLS kosong atau tidak valid. Harap isi dengan URL playlist YouTube yang benar.")
+        return
+
+    # <-- KUNCI PERUBAHAN: Minta konfirmasi di awal
+    user_input = input(f"Akan memproses dan push {len(PLAYLIST_URLS)} playlist. Lanjutkan? (y/n): ").lower()
+    if user_input != 'y':
+        print("\nProses dibatalkan oleh pengguna.")
+        return
 
     total_playlists = len(PLAYLIST_URLS)
-    print(f"Total playlist yang akan diunduh: {total_playlists}")
-
-    for playlist_url in PLAYLIST_URLS:
-        print(f"\n--- Memproses Playlist ---")
-        print(f"📥 Mengunduh dari: {playlist_url}")
+    for i, playlist_url in enumerate(PLAYLIST_URLS):
+        print(f"\n--- Memproses Playlist {i + 1}/{total_playlists} ---")
+        print(f"🔗 URL: {playlist_url}")
         
+        playlist_folder = "" # Inisialisasi nama folder
         try:
-            # Mendapatkan nama folder tujuan dari yt-dlp
-            # Ini penting agar kita tahu di mana harus membersihkan nama file
-            get_playlist_folder_cmd = ['yt-dlp', '--print', '%(playlist_title)s', '--yes-playlist', playlist_url]
-            proc = subprocess.run(get_playlist_folder_cmd, capture_output=True, text=True, check=True)
-            # Mengambil baris pertama dan membersihkan karakter yang tidak perlu
+            # Dapatkan judul playlist untuk nama folder
+            get_playlist_folder_cmd = [
+                'yt-dlp', '--print', '%(playlist_title)s',
+                '--flat-playlist', '--playlist-items', '1', playlist_url
+            ]
+            print("⚡ Mendapatkan judul playlist...")
+            proc = subprocess.run(get_playlist_folder_cmd, capture_output=True, text=True, check=True, encoding='utf-8')
             playlist_folder = proc.stdout.splitlines()[0].strip()
 
-            output_template = f'{playlist_folder}/%(playlist_index)s - %(title)s.%(ext)s'
+            print(f"📂 Nama Folder: '{playlist_folder}'")
+            print(f"📥 Memulai unduhan...")
+            
+            output_template = os.path.join(playlist_folder, '%(playlist_index)s - %(title)s.%(ext)s')
             
             download_command = [
-                'yt-dlp',
-                '--ignore-errors',
-                '--extract-audio',
-                '--audio-format', 'mp3',
-                '--audio-quality', '0',
-                '--yes-playlist',
-                '-o', output_template,
-                playlist_url
+                'yt-dlp', '--ignore-errors', '--extract-audio', '--audio-format', 'mp3',
+                '--audio-quality', '0', '--yes-playlist', '-o', output_template, playlist_url
             ]
             
             subprocess.run(download_command, check=True)
-            print(f"✅ Selesai mengunduh playlist ke folder: '{playlist_folder}'")
+            print(f"✅ Selesai mengunduh ke folder: '{playlist_folder}'")
 
-            # --- PANGGIL FUNGSI PEMBERSIH NAMA FILE ---
+            # Bersihkan nama file setelah download selesai
             clean_filenames_in_directory(playlist_folder)
 
+            # <-- KUNCI PERUBAHAN: Panggil fungsi git di dalam loop
+            # Buat pesan commit yang dinamis dan informatif
+            commit_msg = f"Update: Sinkronisasi playlist '{playlist_folder}'"
+            commit_and_push_changes(playlist_folder, commit_msg)
+
         except subprocess.CalledProcessError as e:
-            print(f"❌ Gagal memproses playlist. Error: {e}")
+            print(f"❌ Gagal memproses playlist. Periksa kembali URL dan koneksi Anda.")
+            print(f"   stdout: {e.stdout}")
+            print(f"   stderr: {e.stderr}")
         except Exception as e:
             print(f"❌ Terjadi kesalahan tak terduga: {e}")
-    
-    return True
-
-def push_to_github():
-    """
-    Menjalankan perintah Git untuk menambahkan, commit, dan push file ke GitHub.
-    """
-    try:
-        print("\n--- Memulai proses push ke GitHub ---")
-        
-        print(" menjalankan `git add .`...")
-        subprocess.run(['git', 'add', '.'], check=True)
-        
-        print(f" menjalankan `git commit` dengan pesan: '{COMMIT_MESSAGE}'...")
-        subprocess.run(['git', 'commit', '-m', COMMIT_MESSAGE, '--allow-empty'], check=True)
-
-        print(" menjalankan `git push`...")
-        subprocess.run(['git', 'push', 'origin', 'main'], check=True) 
-        
-        print("\n✅ Sukses! Semua file berhasil di-push ke GitHub.")
-
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Proses Git gagal. Error: {e}")
-    except FileNotFoundError:
-        print("❌ Perintah 'git' tidak ditemukan. Pastikan Git sudah terinstall.")
-    except Exception as e:
-        print(f"❌ Terjadi kesalahan tak terduga saat push ke GitHub: {e}")
 
 if __name__ == "__main__":
-    if download_playlists():
-        user_input = input("\nProses download selesai. Lanjutkan push ke GitHub? (y/n): ").lower()
-        if user_input == 'y':
-            push_to_github()
-        else:
-            print("\nProses push ke GitHub dibatalkan.")
+    download_and_sync_playlists()
+    print("\n\n🎉 Semua proses telah selesai.")
